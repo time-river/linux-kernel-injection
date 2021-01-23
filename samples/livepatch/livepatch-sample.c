@@ -10,6 +10,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/livepatch.h>
+#include <linux/printk.h>
 
 /*
  * This (dumb) live patch overrides the function that prints the
@@ -57,6 +58,7 @@ static struct klp_patch patch = {
 
 static int livepatch_init(void)
 {
+	pr_info("injection: run %s\n", __func__);
 	return klp_enable_patch(&patch);
 }
 
