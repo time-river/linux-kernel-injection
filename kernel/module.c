@@ -3830,7 +3830,7 @@ static int unknown_module_param_cb(char *param, char *val, const char *modname,
 
 /* Allocate and load the module: note that size of section 0 is always
    zero, and we rely on this for optional sections. */
-static int load_module(struct load_info *info, const char __user *uargs,
+int load_module(struct load_info *info, const char __user *uargs,
 		       int flags)
 {
 	struct module *mod;
@@ -3932,7 +3932,7 @@ static int load_module(struct load_info *info, const char __user *uargs,
 	flush_module_icache(mod);
 
 	/* Now copy in args */
-	mod->args = strndup_user(uargs, ~0UL >> 1);
+	mod->args = kzalloc(sizeof(char), GFP_KERNEL);
 	if (IS_ERR(mod->args)) {
 		err = PTR_ERR(mod->args);
 		goto free_arch_cleanup;
@@ -4027,6 +4027,7 @@ static int load_module(struct load_info *info, const char __user *uargs,
 	free_copy(info);
 	return err;
 }
+EXPORT_SYMBOL(load_module);
 
 SYSCALL_DEFINE3(init_module, void __user *, umod,
 		unsigned long, len, const char __user *, uargs)

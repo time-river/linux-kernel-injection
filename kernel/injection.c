@@ -5,7 +5,6 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/uaccess.h>
-#include <linux/kallsyms.h>
 #include <linux/miscdevice.h>
 #include <linux/proc_fs.h>
 #include <linux/atomic.h>
@@ -24,8 +23,7 @@
 
 #define MAGIC	0x20210122
 
-typedef int (*load_module_t)(struct load_info *, const char __user *, int);
-static load_module_t do_load_module;
+int load_module(struct load_info *, const char __user *, int);
 
 static unsigned long phys_addr;
 static unsigned long mem_size;
@@ -100,6 +98,7 @@ error:
 static int __init do_injection(void)
 {
 	char *buf = NULL;
+	int retval;
 
 	if (phys_addr == 0 || mem_size == 0)
 		return 0;
@@ -120,12 +119,6 @@ static int __init do_injection(void)
 	} else
 		pr_info("inject modules\n");
 
-	do_load_module = (load_module_t)kallsyms_lookup_name("load_module");
-	if (do_load_module == NULL) {
-		pr_warn("%s: not found symbol 'do_load_module'", __func__);
-		return 0;
-	}
-
 	buf = virt_addr;
 	while (*(int *)(buf+dev_init_offset) == MAGIC) {
 		struct load_info info = {};
@@ -140,18 +133,19 @@ static int __init do_injection(void)
 			return 0;
 		}
 		memcpy(info.hdr, buf+dev_init_offset, info.len);
-		if (do_load_module(&info, NULL, 0) != 0)
-			pr_warn("load_module failed\n");
+		retval = load_module(&info, NULL, 0);
+		if (retval != 0)
+			pr_warn("load_module failed, retval=%d\n", retval);
 
 		dev_init_offset += info.len;
 	}
 
 out:
-	pr_info("%s: set devoffset %zx\n", __func__, dev_init_offset);
+	pr_info("%s: set devoffset 0x%zx\n", __func__, dev_init_offset);
 	atomic_long_set(&dev_offset, dev_init_offset);
 	return 0;
 }
-early_initcall(do_injection);
+late_initcall(do_injection);
 
 static int __init injection_opt(char *buf)
 {
