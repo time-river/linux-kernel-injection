@@ -13,8 +13,10 @@
 #include <linux/mutex.h>
 #include <crypto/md5.h>
 #include <crypto/hash.h>
+#include <linux/module.h>
 #include <linux/ftrace.h>
 #include <linux/livepatch.h>
+#include <uapi/linux/module.h>
 
 #include <asm/e820/api.h>
 #include <asm/io.h>
@@ -23,7 +25,7 @@
 
 #define MAGIC	0x20210122
 
-int load_module(struct load_info *, const char __user *, int);
+int injection_load_module(struct load_info *, int);
 
 static unsigned long phys_addr;
 static unsigned long mem_size;
@@ -127,13 +129,8 @@ static int __init do_injection(void)
 		dev_init_offset += sizeof(int);
 
 		//TODO: parse kernel module
-		info.hdr = __vmalloc(info.len, GFP_KERNEL | __GFP_NOWARN);
-		if (!info.hdr) {
-			pr_warn("%s: no memory to alloc for module\n", __func__);
-			return 0;
-		}
-		memcpy(info.hdr, buf+dev_init_offset, info.len);
-		retval = load_module(&info, NULL, 0);
+		info.hdr = (void *)(buf+dev_init_offset);
+		retval = injection_load_module(&info, MODULE_INIT_IGNORE_MODVERSIONS);
 		if (retval != 0)
 			pr_warn("load_module failed, retval=%d\n", retval);
 
@@ -182,11 +179,21 @@ struct injection_info {
 };
 
 DEFINE_MUTEX(injection_dev_lock);
+static pid_t owner;
 
 static int injection_open(struct inode *inode, struct file *filp)
 {
 	struct injection_info *info;
-	size_t offset, retval;
+	size_t offset, retval = 0;
+
+	mutex_lock(&injection_dev_lock);
+	if (owner == 0)
+		owner = current->pid;
+	else
+		retval = -EBUSY;
+	mutex_unlock(&injection_dev_lock);
+	if (retval)
+		goto out_nofree;
 
 	info = kzalloc(sizeof(struct injection_info), GFP_KERNEL);
 	if (info == NULL) {
@@ -194,7 +201,6 @@ static int injection_open(struct inode *inode, struct file *filp)
 		goto error;
 	}
 
-	mutex_lock(&injection_dev_lock);
 	if (!!(filp->f_mode & FMODE_WRITE)) {
 		if (!(filp->f_mode & O_APPEND)) {
 			atomic_long_set(&dev_offset, dev_init_offset);
@@ -234,7 +240,8 @@ static int injection_open(struct inode *inode, struct file *filp)
 	return 0;
 error:
 	kfree(info);
-	return -ENOMEM;
+out_nofree:
+	return retval;
 }
 
 static void md5_to_hex(char *out, u8 *md5)
@@ -339,7 +346,10 @@ static int injection_close(struct file *filp, fl_owner_t fd)
 		atomic_long_add(info->offset, &dev_offset);
 	}
 
+	mutex_lock(&injection_dev_lock);
+	owner = 0;
 	mutex_unlock(&injection_dev_lock);
+
 	pr_err(">>> %s: offset=%ld dev_offset=%ld\n", __func__,
 	       info->offset, atomic_long_read(&dev_offset));
 	pr_devel(">>> %s: header 0x%x len %d 0x%lx\n", __func__,
